@@ -1,7 +1,6 @@
 ---
 title: "Biomarkers of ASD"
-subtitle: "If you want a subtitle put it here"
-author: "List names here"
+author: "Josephine Kaminaga, Jay Leung, Alex Morikawa, Madhav Rao, Emily Tian"
 date: last-modified
 published-title: "Updated"
 editor: visual
@@ -27,11 +26,26 @@ Write a brief one-paragraph abstract that describes the contents of your write-u
 
 ## Dataset
 
-Write a brief data description, including: how data were obtained; sample characteristics; variables measured; and data preprocessing. This can be largely based on the source paper and should not exceed 1-2 paragraphs.
+The biomarker data in this project comes from a paper by Hewitson et al. (2021), which investigated various statistical methods that could be applied to identify biomarkers of autism. In this paper, data was obtained through a blood draw of 154 male pediatric participants, approximately half of whom were diagnosed with autism spectrum disorder (ASD) and the other half of whom were considered neurotypical (TD). The majority of participants were of Caucasian or Latino ethnicity, and the mean ages of the ASD and TD groups were 5.6 and 5.7 years respectively. All ASD participants were assessed by a clinical psychologist to obtain their Autism Diagnostic Observation Schedule (ADOS) total score - a common measurement of ASD symptom severity. Participants were all healthy and fasted the night before the blood draw.
+
+Blood draws were ran through a SomaLogic protein assay that measured 1,317 proteins in each of the 154 blood samples in total. Of the 1,317 proteins measured, 192 proteins did not pass a quality control check (the exact parameters of which were not described in the paper.) This led to a final dataset of 154 observations of 1,125 proteins each. As part of data pre-processing, protein measurements were then log-10 and z-transformed to deal with skew and outliers, and any outliers that had absolute values greater than 3 were set to 3.
 
 ## Summary of published analysis
 
 Summarize the methodology of the paper in 1-3 paragraphs. You need not explain the methods in depth as we did in class; just indicate what methods were used and how they were combined. If possible, include a diagram that depicts the methodological design. (Quarto has support for [GraphViz and Mermaid flowcharts](https://quarto.org/docs/authoring/diagrams.html).) Provide key results: the proteins selected for the classifier and the estimated accuracy.
+
+```{mermaid}
+flowchart TD
+A[Data collection] --> B[Data preprocessing]
+B --> C[t-Test]
+B --> D[Correlation approach]
+B --> E[Random forest]
+C --> F[Intersection of top 10 from each method; identified 5 core proteins]
+D --> F
+E --> F
+F --> G[Logistic regression model adding in non-core proteins]
+G-- Measure AUC ---H[Final panel of 9 proteins]
+```
 
 ## Findings
 
