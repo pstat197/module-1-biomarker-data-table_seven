@@ -7,8 +7,8 @@ editor: visual
 ## 
 
 ```{r}
-train <- read.csv('../data/biomarker-train.csv')
-test <- read.csv('../data/biomarker-test.csv')
+train <- read.csv('../../data/biomarker-train.csv')
+test <- read.csv('../../data/biomarker-test.csv')
 
 train
 ```
@@ -24,7 +24,7 @@ library(randomForest)
 library(tidymodels)
 library(modelr)
 library(yardstick)
-load('../data/biomarker-clean.RData')
+load('../../data/biomarker-clean.RData')
 
 ## MULTIPLE TESTING
 ####################
@@ -119,8 +119,10 @@ class_metrics <- metric_set(sensitivity,
 
 testing(biomarker_split) %>%
   add_predictions(fit, type = 'response') %>%
-  class_metrics(estimate = factor(pred > 0.5),
-              truth = factor(class), pred,
+  mutate(pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) %>%
+  class_metrics(estimate = pred.fac,
+              truth = truth.fac, pred,
               event_level = 'second')
 
 ```

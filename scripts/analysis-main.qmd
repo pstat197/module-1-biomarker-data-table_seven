@@ -1,0 +1,263 @@
+---
+title: "analysis-main"
+format: html
+---
+
+Note: using a QMD file and not a .R file because some analyses were done in Python. QMD supports multiple languages.
+
+```{r load-libraries, message = FALSE}
+library(tidyverse)
+library(infer)
+library(randomForest)
+library(tidymodels)
+library(modelr)
+library(yardstick)
+
+# loading required python libraries into QMD session
+reticulate::py_require("numpy")
+reticulate::py_require("scikit-learn")
+```
+
+```{python load-libraries}
+import pandas as pd
+from pathlib import Path
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix
+```
+
+
+
+## 1: Reason for Log Transformation
+
+```{r log-transform}
+# Load biomarker-raw dataset
+biomarker_raw <- read.csv("../data/biomarker-raw.csv")
+ncol(biomarker_raw)
+
+# there are 1320 proteins. Let's make a histogram to visualize 
+# the distribution of some of their raw values.
+protein_sample <- sample(colnames(biomarker_raw), 3)
+
+biomarker_sample1 <- biomarker_raw |>
+  select(protein_sample[1]) |>
+  slice(-1) |>
+  pull() |>
+  as.numeric()
+
+biomarker_sample2 <- biomarker_raw |>
+  select(protein_sample[2]) |>
+  slice(-1) |>
+  pull() |>
+  as.numeric()
+
+biomarker_sample3 <- biomarker_raw |>
+  select(protein_sample[3]) |>
+  slice(-1) |>
+  pull() |>
+  as.numeric()
+
+# make histograms of 3 randomly selected proteins
+hist(biomarker_sample1, breaks = 15,
+     xlab = protein_sample[1],
+     main = "Distribution of Randomly Sampled Protein 1")
+hist(biomarker_sample2, breaks = 15,
+     xlab = protein_sample[2],
+     main = "Distribution of Randomly Sampled Protein 2")
+hist(biomarker_sample3, breaks = 15,
+     xlab = protein_sample[3],
+     main = "Distribution of Randomly Sampled Protein 3")
+```
+All three histograms reveal that proteins are skewed to the right - that is, they have clusters of values on the lower end of measurement with a long tail of smaller frequency high value measurements. Applying the log transformation to protein measurements will rein in outliers and make the distribution of sampled proteins more Gaussian, which is critical for our further analysis procedures such as the t-test.
+
+## 2: Outlier Analysis
+
+```{r outliers, warning = FALSE}
+var_names <- read_csv('../data/biomarker-raw.csv', 
+                     col_names = F, 
+                     n_max = 2, 
+                     col_select = -(1:2),
+                     show_col_types = FALSE) %>%
+  t() %>%
+  as_tibble() %>%
+  rename(name = V1, 
+         abbreviation = V2) %>%
+  na.omit()
+
+# This bit of code transforms the raw data up until the trimming
+biomarker_outliers <- read_csv('../data/biomarker-raw.csv', 
+         skip = 2,
+         col_select = -2L,
+         col_names = c('group', 
+                       'empty',
+                       pull(var_names, abbreviation),
+                       'ados'),
+         na = c('-', ''),
+         show_col_types = FALSE) %>%
+  filter(!is.na(group)) %>%
+  # log transform, center and scale, and trim
+  mutate(across(.cols = -c(group, ados), 
+                ~ scale(log10(.x))[, 1])) %>%
+  # reorder columns
+  select(group, ados, everything())
+
+# comparison function for filtering the data
+temp <- function(datacol) {
+  return(datacol > 3)
+}
+
+# Filter any rows that don't have at least 1 outlier
+# then calculate each individual's total no. of outliers
+biomarker_outliers <- biomarker_outliers |>
+  filter(if_any(c(-group, -ados), temp)) |>
+  rowwise() |>
+  mutate(
+    n_indv_outliers = sum(
+      across(c(-group, -ados)) > 3
+    )
+  )
+
+# Sorting from most to least outliers
+biomarker_outliers_arranged <- biomarker_outliers |>
+  arrange(-n_indv_outliers) |>
+  select(group, ados, n_indv_outliers)
+
+# Make histograms for the distribution of outliers in ASD and TD groups
+biomarker_outliers_arranged |>
+  filter(group == "ASD") |>
+  ggplot(aes(x = n_indv_outliers)) +
+  geom_histogram(color = "white", bins = 20) +
+  labs(x = "No. of outliers", y = "Count",
+       title = "Distribution of outliers for ASD group") +
+  theme_minimal()
+
+biomarker_outliers_arranged |>
+  filter(group == "TD") |>
+  ggplot(aes(x = n_indv_outliers)) +
+  geom_histogram(color = "white", bins = 20) +
+  labs(x = "No. of outliers", y = "Count",
+       title = "Distribution of outliers for TD group") +
+  theme_minimal()
+
+# Quick investigation of the arranged outliers
+head(biomarker_outliers_arranged, 15)
+```
+From the histograms, it seems like both the ASD and TD groups have a similar distribution of outliers. Running the `head()` command on the outlier dataframe shows that the TD group in particular has a higher frequency of individuals with a large (>75) number of outliers than the ASD group.
+
+## 3: Modifications to the Original Model
+
+### Train-Test Split
+
+```{python data-manip}
+DATA_PATH = Path("../data/biomarker-raw.csv")
+TRAIN_PATH = Path("../data/biomarker-train.csv")
+TEST_PATH = Path("../data/biomarker-test.csv")
+TARGET_COLUMN = "Group"
+TRAIN_FRACTION = 0.80
+RANDOM_SEED = 197
+
+df = pd.read_csv(DATA_PATH)
+df.head()
+
+train_index = (
+    df.groupby(TARGET_COLUMN)
+      .sample(frac=TRAIN_FRACTION, random_state=RANDOM_SEED)
+      .index
+)
+train_df = df.loc[train_index].reset_index(drop=True)
+test_df = df.drop(train_index).reset_index(drop=True)
+
+train_df.head()
+
+train_df.to_csv(TRAIN_PATH, index=False)
+test_df.to_csv(TEST_PATH, index=False)
+
+summary = {
+    "train_size": len(train_df),
+    "test_size": len(test_df),
+    "train_group_counts": train_df[TARGET_COLUMN].value_counts().to_dict(),
+    "test_group_counts": test_df[TARGET_COLUMN].value_counts().to_dict(),
+}
+summary
+```
+
+```{python train-model}
+#loading in training data
+training_data = train_df
+training_data = training_data.drop(columns=['Target Full Name', 'ADOS        Total Score'])
+
+#loading in testing data
+test_data = pd.read_csv('../data/biomarker-test.csv')
+test_data = test_data.drop(columns=['Target Full Name', 'ADOS        Total Score'])
+test_data = test_data.dropna()
+
+### Fit models based on a train/test split
+predictors = training_data.drop(columns=['Group'])
+response = training_data['Group']
+
+# Fit Random Forest
+rf = RandomForestClassifier(
+    n_estimators=1000,
+    random_state=101422,
+    oob_score=False, 
+)
+
+rf.fit(X=predictors, y=response)
+
+#confusion matrix
+y_pred = rf.predict(predictors)
+conf_mat = confusion_matrix(response, y_pred)
+print(conf_mat)
+
+# Compute feature importance
+importances = pd.DataFrame({
+    'protein': predictors.columns,
+    'MeanDecreaseGini': rf.feature_importances_
+})
+
+# Get top 10 proteins
+proteins_s2 = (
+    importances
+    .nlargest(10, 'MeanDecreaseGini')
+    ['protein']
+    .tolist()
+)
+
+print(proteins_s2)
+```
+
+
+### Larger Number of Proteins
+
+### Fuzzy Intersection
+
+
+
+## Simpler and Alternative Panels
+
+The train/test split model is a simpler panel that achieves comparable accuracy to the in-class analysis:
+```{python}
+#performance with a simple subset (top 8 proteins)
+simple_proteins = list(['Dermatopontin', 'Immunoglobulin D', 'C-X-C motif chemokine 16', 'Pleiotrophin', 'Mitogen-activated protein kinase 14', 'CD166 antigen', 'Hyaluronan and proteoglycan link protein 1', 'Coagulation factor IX'])
+
+predictors_simple = training_data[simple_proteins]
+rf_simple = RandomForestClassifier(
+    n_estimators=1000,
+    random_state=101422,
+    oob_score=False, 
+)
+rf_simple.fit(X=predictors_simple, y=response)
+
+X_test_simple = test_data.drop(columns=['Group'])
+X_test_simple = X_test_simple[simple_proteins]
+
+y_test_simple = test_data['Group']
+
+y_pred_simple = rf_simple.predict(X_test_simple)
+
+conf_mat_simple = confusion_matrix(y_test_simple, y_pred_simple)
+
+accuracy_simple = np.trace(conf_mat_simple) / np.sum(conf_mat_simple)
+print("Accuracy:", accuracy_simple)
+```
+
