@@ -13,16 +13,15 @@ execute:
   cache: true
 ---
 
-Use this as a template. Keep the headers and remove all other text. In all, your report can be quite short. When it is complete, render and then push changes to your team repository.
-
-```{r}
+```{r, warning = FALSE, message = FALSE}
 # load any other packages and read data here
 library(tidyverse)
+load("report_files/analysis.Rdata")
 ```
 
 ## Abstract
 
-Write a brief one-paragraph abstract that describes the contents of your write-up.
+This report discusses and extends the analysis done in "Blood biomarker discovery for autism spectrum disorder: A proteomic analysis", a 2021 paper that has since been retracted due to errors in a section of the analysis. We cover the data gathering process and the characteristics of the dataset, the original methodology used by the authors of the paper, and extend the methodology to include three different modifications to the procedures. Specifically, our modifications are: repeat the analysis with a train-test split for all approaches, choose more than ten top predictive proteins in both selection methods, and use a fuzzy intersection instead of hard intersection to select the combination of top predictive proteins. We then test the results of these three independent modifications on our test set and record their classification accuracy, benchmarked by the in-class analysis.
 
 ## Dataset
 
@@ -32,7 +31,11 @@ Blood draws were ran through a SomaLogic protein assay that measured 1,317 prote
 
 ## Summary of published analysis
 
-Summarize the methodology of the paper in 1-3 paragraphs. You need not explain the methods in depth as we did in class; just indicate what methods were used and how they were combined. If possible, include a diagram that depicts the methodological design. (Quarto has support for [GraphViz and Mermaid flowcharts](https://quarto.org/docs/authoring/diagrams.html).) Provide key results: the proteins selected for the classifier and the estimated accuracy.
+This paper used three different approaches to identify important proteins for ASD prediction. Prior to applying these approaches to the data, the data itself was log and z-transformed with outliers clipped. The three methods were a random forest, a t-test, and a correlation approach. From each of these methods, the top 10 proteins that had the most predictive value (random forest approach), the most significant p-values (t-test approach), or the highest correlation (correlation approach) were selected from each approach. Their intersection of 5 core proteins was identified, and another 13 proteins were included in at least one but not all three top 10 protein lists. The core proteins were DERM, MAPK14, IGD, suPAR, and EPHB2. The other 13 proteins were ALCAM, eIF-4H, SOST, c6, calcineurin, RELT, fCN1, PTN, C1QR1, prolactin receptor, ROR1, GI24, and ARSB.
+
+From there, a logistic regression model was fitted 1,000 times with an 80-20 train-test split to calculate model performance via area under the curve (AUC). The purpose of these models was to add one by one the 13 non-core proteins and test whether the model AUC increases past the performance of the core protein model. This procedure resulted in four additional proteins that increased the AUC of the logistic regression model when added to the core group. These proteins were ROR1, GI24, eIF-4H, and ARSB. Therefore, the final panel of proteins that were identified through this procedure consisted of nine proteins (DERM, MAPK14, IGD, suPAR, EPHB2, ROR1, Gi24, eIF-4H, ARSB), with an AUC of 0.860 $\pm$ 0.064, sensitivity of 0.833 $\pm$ 0.118, and specificity of 0.846 $\pm$ 0.118.
+
+The methodological flowchart of this paper is shown below.
 
 ```{mermaid}
 flowchart TD
@@ -49,16 +52,81 @@ G-- Measure AUC ---H[Final panel of 9 proteins]
 
 ## Findings
 
-Summarize your findings here. I've included some subheaders in a way that seems natural to me; you can structure this section however you like.
-
 ### Impact of preprocessing and outliers
 
-Tasks 1-2
+Data visualization of the protein distributions before pre-processing revealed a very clear reason for their log-transformation. As seen below, the distributions of these randomly chosen proteins (and in general most of the proteins in the dataset) are skewed to the right. The majority of observations are clustered around the lower end of measurement, but there is a long tail of higher-value protein measurements that throws off the distribution.
+
+```{r}
+plot(h1, main = "Histogram of Randomly Sampled Protein 1",
+     xlab = protein_sample[1])
+plot(h2, main = "Histogram of Randomly Sampled Protein 2",
+     xlab = protein_sample[2])
+plot(h3, main = "Histogram of Randomly Sampled Protein 3",
+     xlab = protein_sample[3])
+```
+
+Applying the log transformation to protein measurements will rein in outliers and make the distribution of sampled proteins more Gaussian, which is critical for our further analysis procedures such as the t-test. The log transformation effect can be seen below, for the same proteins. The x-axis has much less range than the non-log-transformed histograms (e.g. 6-7.5 for the log-transformed roundabout homolog 3 protein vs. 500-2000 for the same protein without a log transformation.) This ensures that the skew in the data is controlled and that the models can fit on data that better meets their assumptions.
+
+```{r}
+hist(log(biomarker_sample1), breaks = 15,
+     xlab = protein_sample[1],
+     main = "Log-Transformed Histogram of Randomly Sampled Protein 1")
+hist(log(biomarker_sample2), breaks = 15,
+     xlab = protein_sample[2],
+     main = "Log-Transformed Histogram of Randomly Sampled Protein 2")
+hist(log(biomarker_sample3), breaks = 15,
+     xlab = protein_sample[3],
+     main = "Log-Transformed Histogram of Randomly Sampled Protein 3")
+```
+Similarly, data visualization of the outliers for both groups revealed the extent of outliers in the data. Below we present the distribution of how many outliers each participant in the two groups had.
+
+```{r}
+bHist_ASD
+bHist_TD
+```
+Both the ASD and TD groups have a similar distribution of outliers. What is more concerning is the large range and high counts of outliers - most participants had fewer than 20 outliers, but there were a significant number of participants in both the TD and ASD groups who had upwards of 50 outliers. Running the `head()` command on the outlier dataframe shows that the TD group in particular has a higher frequency of individuals with a large (>75) number of outliers than the ASD group.
+
+```{r}
+head(biomarker_outliers_arranged, 15)
+```
+
 
 ### Methodological variations
 
-Task 3
+#### Train-Test Split & Performance
 
-### Improved classifier
+HOW WAS THE DATA SPLIT VIA TRAIN TEST & WHAT DID WE DO
 
-Task 4
+When using the train/test data split method, the random forest classifier achieved comparable accuracy to the in-class analysis. However, under the same train/test split, the overall predictors selected by the intersection of t-Test and random forest methods performed slightly worse than the in-class analysis:
+
+```{r}
+biomarker_test %>%
+  add_predictions(fit, type = 'response') %>%
+  mutate(pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) %>%
+  class_metrics(estimate = pred.fac,
+              truth = truth.fac, pred,
+              event_level = 'second')
+```
+For comparison, the in-class analysis numbers were 0.875 sensitivity, 0.8 specificity, 0.839 accuracy, and 0.908 AUC.
+
+#### Larger Number of Predictive Proteins & Performance
+
+WHAT DID THIS INVOLVE & WHAT IS THE PERFORMANCE
+
+#### Fuzzy Intersection & Performance
+
+HOW DID WE MAKE THE FUZZY INTERSECTION??
+
+The fuzzy intersection method also did not produce satisfactory accuracy and AUC compared to the in-class analysis. The only metric that it outperforms the in-class analysis on is specificity, with 0.86 specificity compared to 0.8.
+
+```{r}
+testing(biomarker_split_fuzzy) |>
+  mutate(pred = as.numeric(predicted_fuzzy_en),
+         pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) |>
+  class_metrics(estimate = pred.fac,
+                truth = truth.fac, pred,
+                event_level = "second")
+```
+

@@ -58,13 +58,13 @@ biomarker_sample3 <- biomarker_raw |>
   as.numeric()
 
 # make histograms of 3 randomly selected proteins
-hist(biomarker_sample1, breaks = 15,
+h1 <- hist(biomarker_sample1, breaks = 15,
      xlab = protein_sample[1],
      main = "Distribution of Randomly Sampled Protein 1")
-hist(biomarker_sample2, breaks = 15,
+h2 <- hist(biomarker_sample2, breaks = 15,
      xlab = protein_sample[2],
      main = "Distribution of Randomly Sampled Protein 2")
-hist(biomarker_sample3, breaks = 15,
+h3 <- hist(biomarker_sample3, breaks = 15,
      xlab = protein_sample[3],
      main = "Distribution of Randomly Sampled Protein 3")
 ```
@@ -123,7 +123,7 @@ biomarker_outliers_arranged <- biomarker_outliers |>
   select(group, ados, n_indv_outliers)
 
 # Make histograms for the distribution of outliers in ASD and TD groups
-biomarker_outliers_arranged |>
+bHist_ASD <- biomarker_outliers_arranged |>
   filter(group == "ASD") |>
   ggplot(aes(x = n_indv_outliers)) +
   geom_histogram(color = "white", bins = 20) +
@@ -131,7 +131,7 @@ biomarker_outliers_arranged |>
        title = "Distribution of outliers for ASD group") +
   theme_minimal()
 
-biomarker_outliers_arranged |>
+bHist_TD <- biomarker_outliers_arranged |>
   filter(group == "TD") |>
   ggplot(aes(x = n_indv_outliers)) +
   geom_histogram(color = "white", bins = 20) +
@@ -225,17 +225,253 @@ proteins_s2 = (
 
 print(proteins_s2)
 ```
+The full analysis, including the t-test and logistic regression fit on the train-test split, is done in R:
+```{r}
+train <- read.csv('../data/biomarker-train.csv')
+test <- read.csv('../data/biomarker-test.csv') |>
+  select(-Target.Full.Name,
+         -ADOS........Total.Score) |>
+  slice(-1)
+# function to compute tests
+test_fn <- function(.df){
+  t_test(.df, 
+         formula = level ~ Group,
+         order = c('ASD', 'TD'),
+         alternative = 'two-sided',
+         var.equal = F)
+}
+
+ttests_out <- train %>%
+  # drop ADOS score
+  select(-Target.Full.Name, 
+         -ADOS........Total.Score) %>%
+  # arrange in long format
+  pivot_longer(-Group, 
+               names_to = 'protein', 
+               values_to = 'level') %>%
+  # nest by protein
+  nest(data = c(level, Group)) %>% 
+  # compute t tests
+  mutate(ttest = map(data, test_fn)) %>%
+  unnest(ttest) %>%
+  # sort by p-value
+  arrange(p_value) %>%
+  # multiple testing correction
+  mutate(m = n(),
+         hm = log(m) + 1/(2*m) - digamma(1),
+         rank = row_number(),
+         p.adj = m*hm*p_value/rank)
+
+# select significant proteins
+proteins_s1 <- ttests_out %>%
+  slice_min(p.adj, n = 10) %>%
+  pull(protein)
+
+## RANDOM FOREST
+##################
+
+# store predictors and response separately
+predictors <- train %>%
+  select(-c(Group, Target.Full.Name, 
+         ADOS........Total.Score))
+
+response <- train %>% pull(Group) %>% factor()
+
+# fit RF
+set.seed(101422)
+rf_out <- randomForest(x = predictors, 
+                       y = response, 
+                       ntree = 1000, 
+                       importance = T)
+
+# check errors
+rf_out$confusion
+
+# compute importance scores
+proteins_s2 <- rf_out$importance %>% 
+  as_tibble() %>%
+  mutate(protein = rownames(rf_out$importance)) %>%
+  slice_max(MeanDecreaseGini, n = 10) %>%
+  pull(protein)
+
+## LOGISTIC REGRESSION
+#######################
+
+# select subset of interest
+proteins_sstar <- intersect(proteins_s1, proteins_s2)
+
+biomarker_sstar <- train %>%
+  select(Group, any_of(proteins_sstar)) %>%
+  mutate(class = (Group == 'ASD')) %>%
+  select(-Group)
+
+biomarker_test <- test |>
+  select(Group, any_of(proteins_sstar)) |>
+  mutate(class = (Group == "ASD"),
+         Dermatopontin = as.numeric(Dermatopontin),
+         C.X.C.motif.chemokine.16 = as.numeric(C.X.C.motif.chemokine.16),
+         Mitogen.activated.protein.kinase.14 =
+           as.numeric(Mitogen.activated.protein.kinase.14))
+
+# fit logistic regression model to training set
+fit <- glm(class ~ ., 
+           data = biomarker_sstar, 
+           family = 'binomial')
+```
 
 
 ### Larger Number of Proteins
 
+
+
 ### Fuzzy Intersection
 
+```{r fuzzy}
+## MULTIPLE TESTING
+####################
+# function to compute tests
+test_fn_fuzzy <- function(.df){
+  t_test(.df, 
+         formula = level ~ group,
+         order = c('ASD', 'TD'),
+         alternative = 'two-sided',
+         var.equal = F)
+}
+
+ttests_out_fuzzy <- biomarker_clean %>%
+  # drop ADOS score
+  select(-ados) %>%
+  # arrange in long format
+  pivot_longer(-group, 
+               names_to = 'protein', 
+               values_to = 'level') %>%
+  # nest by protein
+  nest(data = c(level, group)) %>% 
+  # compute t tests
+  mutate(ttest = map(data, test_fn_fuzzy)) %>%
+  unnest(ttest) %>%
+  # sort by p-value
+  arrange(p_value) %>%
+  # multiple testing correction
+  mutate(m = n(),
+         hm = log(m) + 1/(2*m) - digamma(1),
+         rank = row_number(),
+         p.adj = m*hm*p_value/rank)
+
+# select significant proteins
+proteins_s1_fuzzy <- ttests_out_fuzzy %>%
+  slice_min(p.adj, n = 10) %>%
+  pull(protein)
+
+## RANDOM FOREST
+##################
+
+# store predictors and response separately
+predictors_fuzzy <- biomarker_clean %>%
+  select(-c(group, ados))
+
+response_fuzzy <- biomarker_clean %>% pull(group) %>% factor()
+
+# fit RF
+set.seed(101422)
+rf_out_fuzzy <- randomForest(x = predictors_fuzzy, 
+                       y = response_fuzzy, 
+                       ntree = 1000, 
+                       importance = T)
+
+# check errors
+rf_out_fuzzy$confusion
+
+# compute importance scores
+proteins_s2_fuzzy <- rf_out_fuzzy$importance %>% 
+  as_tibble() %>%
+  mutate(protein = rownames(rf_out_fuzzy$importance)) %>%
+  slice_max(MeanDecreaseGini, n = 10) %>%
+  pull(protein)
+
+## LOGISTIC REGRESSION
+#######################
+
+# MAJOR CHANGE: instead of intersection, we will use union
+# for the "fuzzy intersection"
+proteins_sstar_fuzzy <- union(proteins_s1_fuzzy, proteins_s2_fuzzy)
+
+biomarker_sstar_fuzzy <- biomarker_clean %>%
+  select(group, any_of(proteins_sstar_fuzzy)) %>%
+  mutate(class = (group == 'ASD')) %>%
+  select(-group)
+
+# partition into training and test set
+set.seed(101422)
+biomarker_split_fuzzy <- biomarker_sstar_fuzzy %>%
+  initial_split(prop = 0.8)
+
+# fit logistic regression model to training set
+fit_fuzzy <- glm(class ~ ., 
+           data = training(biomarker_split_fuzzy), 
+           family = 'binomial')
+
+# evaluate errors on test set
+class_metrics <- metric_set(sensitivity, 
+                            specificity, 
+                            accuracy,
+                            roc_auc)
+
+testing(biomarker_split_fuzzy) %>%
+  add_predictions(fit_fuzzy, type = 'response') %>%
+  mutate(pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) |>
+  class_metrics(estimate = pred.fac,
+                truth = truth.fac, pred,
+                event_level = 'second')
+
+# We obtain pretty bad metric results for the regular logistic regression
+# compared to the in-class analysis.
+# We will use cv.glmnet to cross-validate the model and apply elastic net
+# since perhaps the larger number of predictive variables is harming
+# the model's fit.
+
+# Obtain training X & Y matrices for cv.glmnet
+biomarker_train_x <- biomarker_split_fuzzy |>
+  training()|>
+  select(-class) |>
+  as.matrix()
+biomarker_train_y <- biomarker_split_fuzzy |>
+  training() |>
+  pull(class) |>
+  as.factor()
+
+# Obtain testing X matrix for cv.glmnet prediction
+biomarker_test_x <- testing(biomarker_split_fuzzy) |>
+  select(-class) |>
+  as.matrix()
+
+# Fit logistic regression model using cv.glmnet
+fit_fuzzy_en <- glmnet::cv.glmnet(x = biomarker_train_x,
+               y = biomarker_train_y,
+               family = "binomial",
+               alpha = 0.1)
+
+predicted_fuzzy_en <- predict(fit_fuzzy_en,
+        newx = biomarker_test_x,
+        type = "response",
+        s = "lambda.min") 
+
+testing(biomarker_split_fuzzy) |>
+  mutate(pred = as.numeric(predicted_fuzzy_en),
+         pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) |>
+  class_metrics(estimate = pred.fac,
+                truth = truth.fac, pred,
+                event_level = "second")
+# these estimates are better than the initial model with all variables.
+# but are still worse than the in-class analysis.
+```
 
 
 ## Simpler and Alternative Panels
 
-The train/test split model is a simpler panel that achieves comparable accuracy to the in-class analysis:
+The train/test random forest split model is a simpler panel that achieves comparable accuracy to the in-class analysis:
 ```{python}
 #performance with a simple subset (top 8 proteins)
 simple_proteins = list(['Dermatopontin', 'Immunoglobulin D', 'C-X-C motif chemokine 16', 'Pleiotrophin', 'Mitogen-activated protein kinase 14', 'CD166 antigen', 'Hyaluronan and proteoglycan link protein 1', 'Coagulation factor IX'])
@@ -259,5 +495,26 @@ conf_mat_simple = confusion_matrix(y_test_simple, y_pred_simple)
 
 accuracy_simple = np.trace(conf_mat_simple) / np.sum(conf_mat_simple)
 print("Accuracy:", accuracy_simple)
+```
+The full model, trained in R, achieves slightly worse results than the in-class analysis.
+
+```{r}
+class_metrics <- metric_set(sensitivity, 
+                            specificity, 
+                            accuracy,
+                            roc_auc)
+
+biomarker_test %>%
+  add_predictions(fit, type = 'response') %>%
+  mutate(pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) %>%
+  class_metrics(estimate = pred.fac,
+              truth = truth.fac, pred,
+              event_level = 'second')
+```
+
+```{r}
+# save this session as Rdata object to use results
+save.image(file = "../results/report_files/analysis.Rdata")
 ```
 
