@@ -4,7 +4,7 @@ author: "Josephine Kaminaga, Jay Leung, Alex Morikawa, Madhav Rao, Emily Tian"
 date: last-modified
 published-title: "Updated"
 editor: visual
-format: html
+format: pdf
 code-copy: true
 execute:
   message: false
