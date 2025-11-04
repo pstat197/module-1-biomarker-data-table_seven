@@ -16,7 +16,7 @@ execute:
 ```{r, warning = FALSE, message = FALSE}
 # load any other packages and read data here
 library(tidyverse)
-library(modelr)
+library(modelr) 
 library(yardstick)
 library(tidymodels)
 load("report_files/analysis.Rdata")
