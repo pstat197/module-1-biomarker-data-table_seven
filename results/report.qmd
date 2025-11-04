@@ -16,6 +16,9 @@ execute:
 ```{r, warning = FALSE, message = FALSE}
 # load any other packages and read data here
 library(tidyverse)
+library(modelr)
+library(yardstick)
+library(tidymodels)
 load("report_files/analysis.Rdata")
 ```
 
@@ -95,9 +98,11 @@ head(biomarker_outliers_arranged, 15)
 
 #### Train-Test Split & Performance
 
-HOW WAS THE DATA SPLIT VIA TRAIN TEST & WHAT DID WE DO
+For this approach, we split the data with an 80-20% train/test split. A random forest was fit in Python on the training data and achieved 80% accuracy on the testing data, comparable to the in-class analysis. We furthermore proceeded to conduct the t-test and random forest approaches in R on the training data, selecting the top 10 proteins from each method and finding their intersection. Interestingly, the intersection of the top 10 proteins from the t-test and random forest computed from the training data only contained 4 core proteins: dermatopontin (DERM), pleiotrophin (PTN), coagulation factor (CFIX) IX, and mitogen activated protein kinase 14 (MAPK14). Of these core proteins, only two (DERM and MAPK14) were also selected in the original analysis of 9 core proteins.
 
-When using the train/test data split method, the random forest classifier achieved comparable accuracy to the in-class analysis. However, under the same train/test split, the overall predictors selected by the intersection of t-Test and random forest methods performed slightly worse than the in-class analysis:
+Within the train/test split approach, the Python random forest classifier achieved comparable accuracy to the in-class analysis.
+
+However, under the same train/test split, the overall predictors selected by the intersection of t-Test and random forest methods performed slightly worse than the in-class analysis:
 
 ```{r}
 biomarker_test %>%
@@ -112,13 +117,35 @@ For comparison, the in-class analysis numbers were 0.875 sensitivity, 0.8 specif
 
 #### Larger Number of Predictive Proteins & Performance
 
-WHAT DID THIS INVOLVE & WHAT IS THE PERFORMANCE
+In this approach, we followed the standard methods of the in-class analysis but changed two important factors in the t-Test and random forest approaches respectively. Instead of selecting the first `n = 10` proteins in the t-test and random forest approaches, we selected the first `n = 30`. This resulted in a core protein panel of 19 proteins - DERM, RELT, calcineurin, MRC2, IgD, PTN, FSTL1, MAPK2, TGF-b R III, MMP-2, gp130 soluble, Notch 1, ALCAM, MATN2, ROR1, RET, TSP4, MAPK14, and EPHB2. There is a good amount of overlap between these selected proteins and the original 9 proteins from the paper - specifically, DERM, MAPK14, IgD, EPHB2, and ROR1 were all selected in both approaches.
+
+We then trained a logistic regression model with the same steps as the in-class analysis, but on the expanded core dataset of 19 proteins. This logistic regression model achieves better specificity and AUC than the in-class model: 0.86 compared to 0.8 for specificity and 0.94 for AUC. The general accuracy of the model is also comparable to the in-class analysis.
+
+```{r}
+class_metrics_new(
+  data = test_results_new,
+  truth = class_factor,
+  estimate = pred_factor,
+  pred,
+  event_level = "second"
+)
+```
+
 
 #### Fuzzy Intersection & Performance
 
-HOW DID WE MAKE THE FUZZY INTERSECTION??
+The fuzzy intersection was produced by following the standard t-Test and random forest approaches followed in the in-class analysis up until the point of finding the intersection of the two top 10 protein sets. Instead of using the `intersect()` function, we instead used the `union()` function to produce an overlapping junction of both top 10 protein sets. From there we fit the standard logistic regression model seen in class, using `glm()`. However, the results of this standard logistic regression model were extremely unsatisfactory, with every metric performing worse than the in-class analysis.
 
-The fuzzy intersection method also did not produce satisfactory accuracy and AUC compared to the in-class analysis. The only metric that it outperforms the in-class analysis on is specificity, with 0.86 specificity compared to 0.8.
+```{r}
+testing(biomarker_split_fuzzy) %>%
+  add_predictions(fit_fuzzy, type = 'response') %>%
+  mutate(pred.fac = as.factor(pred > 0.5),
+         truth.fac = as.factor(class)) |>
+  class_metrics(estimate = pred.fac,
+                truth = truth.fac, pred,
+                event_level = 'second')
+```
+We proceeded to fit a cross-validated logistic regression model the `cv.glmnet()` function from the `glmnet` package, using an elastic net parameter of $\alpha = 0.1$, which emphasized the ridge penalty much more than the lasso penalty. Our cross-validated logistic regression model had better performance than the vanilla logistic regression model. However, this fuzzy intersection model still does not out-perform the in-class analysis in most metrics.. The only metric that it outperforms the in-class analysis on is specificity, with 0.86 specificity compared to 0.8.
 
 ```{r}
 testing(biomarker_split_fuzzy) |>
@@ -129,4 +156,3 @@ testing(biomarker_split_fuzzy) |>
                 truth = truth.fac, pred,
                 event_level = "second")
 ```
-
